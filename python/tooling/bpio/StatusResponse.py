@@ -273,8 +273,15 @@ class StatusResponse(object):
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
+    # StatusResponse
+    def UartChannelCount(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(62))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 0
+
 def StatusResponseStart(builder):
-    builder.StartObject(29)
+    builder.StartObject(30)
 
 def Start(builder):
     StatusResponseStart(builder)
@@ -470,6 +477,12 @@ def StatusResponseAddLedCount(builder, ledCount):
 
 def AddLedCount(builder, ledCount):
     StatusResponseAddLedCount(builder, ledCount)
+
+def StatusResponseAddUartChannelCount(builder, uartChannelCount):
+    builder.PrependUint8Slot(29, uartChannelCount, 0)
+
+def AddUartChannelCount(builder, uartChannelCount):
+    StatusResponseAddUartChannelCount(builder, uartChannelCount)
 
 def StatusResponseEnd(builder):
     return builder.EndObject()

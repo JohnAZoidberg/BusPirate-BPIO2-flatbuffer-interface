@@ -188,8 +188,33 @@ class ConfigurationRequest(object):
             return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
         return False
 
+    # ConfigurationRequest
+    def UartChannels(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from bpio.UartChannelConfiguration import UartChannelConfiguration
+            obj = UartChannelConfiguration()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # ConfigurationRequest
+    def UartChannelsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # ConfigurationRequest
+    def UartChannelsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        return o == 0
+
 def ConfigurationRequestStart(builder):
-    builder.StartObject(20)
+    builder.StartObject(21)
 
 def Start(builder):
     ConfigurationRequestStart(builder)
@@ -319,6 +344,18 @@ def ConfigurationRequestAddHardwareSelftest(builder, hardwareSelftest):
 
 def AddHardwareSelftest(builder, hardwareSelftest):
     ConfigurationRequestAddHardwareSelftest(builder, hardwareSelftest)
+
+def ConfigurationRequestAddUartChannels(builder, uartChannels):
+    builder.PrependUOffsetTRelativeSlot(20, flatbuffers.number_types.UOffsetTFlags.py_type(uartChannels), 0)
+
+def AddUartChannels(builder, uartChannels):
+    ConfigurationRequestAddUartChannels(builder, uartChannels)
+
+def ConfigurationRequestStartUartChannelsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartUartChannelsVector(builder, numElems):
+    return ConfigurationRequestStartUartChannelsVector(builder, numElems)
 
 def ConfigurationRequestEnd(builder):
     return builder.EndObject()

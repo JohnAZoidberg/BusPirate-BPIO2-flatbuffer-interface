@@ -24,6 +24,7 @@ import tooling.bpio.ResponsePacketContents as ResponsePacketContents
 import tooling.bpio.StatusRequest as StatusRequest
 import tooling.bpio.StatusRequestTypes as StatusRequestTypes
 import tooling.bpio.StatusResponse as StatusResponse
+import tooling.bpio.UartChannelConfiguration as UartChannelConfiguration
 #import tooling.bpio.ErrorResponse as ErrorResponse
 
 class BPIOClient:
@@ -35,6 +36,7 @@ class BPIOClient:
         self.serial_port = None
         self.version_flatbuffers_major = 2
         self.minimum_version_flatbuffers_minor = minimum_version
+        self.last_error = None  # last error string reported by the firmware
         
         # Packet routing queues
         self._sync_queue = queue.Queue()   # For sync request/response
@@ -263,6 +265,7 @@ class BPIOClient:
 
             return {
                 'is_async': bool(data_resp.IsAsync()),
+                'channel': data_resp.Channel(),
                 'data_read': data,
                 'error': data_resp.Error().decode('utf-8') if data_resp.Error() else None
             }
@@ -277,12 +280,19 @@ class BPIOClient:
             except queue.Empty:
                 break
 
-    def send_request(self, builder, request_contents_type, request_contents):
+    # BPIO 2.3 added UART channels; firmware that predates them must refuse
+    # (not silently ignore) channel requests, so those require minor 3.
+    UART_CHANNELS_VERSION_MINOR = 3
+
+    def send_request(self, builder, request_contents_type, request_contents, minimum_version_minor=None):
         """Send a request packet and return the response"""
         """Wrap contents in a RequestPacket"""
+        minor = self.minimum_version_flatbuffers_minor
+        if minimum_version_minor is not None:
+            minor = max(minor, minimum_version_minor)
         RequestPacket.Start(builder)
         RequestPacket.AddVersionMajor(builder, self.version_flatbuffers_major)  # BPIO2
-        RequestPacket.AddMinimumVersionMinor(builder, self.minimum_version_flatbuffers_minor) # Minimum flatbuffers version required
+        RequestPacket.AddMinimumVersionMinor(builder, minor) # Minimum flatbuffers version required
         RequestPacket.AddContentsType(builder, request_contents_type)
         RequestPacket.AddContents(builder, request_contents)
         final_packet = RequestPacket.End(builder)
@@ -299,6 +309,7 @@ class BPIOClient:
 
         # Check for ErrorResponse
         if resp_packet.Error():
+            self.last_error = resp_packet.Error().decode('utf-8')
             print(f"Error: {resp_packet.Error().decode('utf-8')}")
             return False
         
@@ -360,6 +371,27 @@ class BPIOClient:
         if 'print_string' in kwargs:
             print_string = builder.CreateString(kwargs['print_string'])
 
+        # uart_channels: list of dicts with keys channel, enable, speed,
+        # data_bits, parity, stop_bits, signal_inversion, tx_enable.
+        uart_channels_vector = None
+        if 'uart_channels' in kwargs:
+            tables = []
+            for ch in kwargs['uart_channels']:
+                UartChannelConfiguration.Start(builder)
+                UartChannelConfiguration.AddChannel(builder, ch['channel'])
+                UartChannelConfiguration.AddEnable(builder, ch.get('enable', True))
+                UartChannelConfiguration.AddSpeed(builder, ch.get('speed', 115200))
+                UartChannelConfiguration.AddDataBits(builder, ch.get('data_bits', 8))
+                UartChannelConfiguration.AddParity(builder, ch.get('parity', False))
+                UartChannelConfiguration.AddStopBits(builder, ch.get('stop_bits', 1))
+                UartChannelConfiguration.AddSignalInversion(builder, ch.get('signal_inversion', False))
+                UartChannelConfiguration.AddTxEnable(builder, ch.get('tx_enable', False))
+                tables.append(UartChannelConfiguration.End(builder))
+            ConfigurationRequest.StartUartChannelsVector(builder, len(tables))
+            for t in reversed(tables):
+                builder.PrependUOffsetTRelative(t)
+            uart_channels_vector = builder.EndVector()
+
         led_color_vector = None
         if 'led_color' in kwargs:
             led_colors = kwargs['led_color']
@@ -410,9 +442,13 @@ class BPIOClient:
             ConfigurationRequest.AddHardwareReset(builder, kwargs['hardware_reset'])
         if 'hardware_selftest' in kwargs:
             ConfigurationRequest.AddHardwareSelftest(builder, kwargs['hardware_selftest'])
+        if uart_channels_vector is not None:
+            ConfigurationRequest.AddUartChannels(builder, uart_channels_vector)
 
         config_request = ConfigurationRequest.End(builder)
-        resp_packet = self.send_request(builder, RequestPacketContents.RequestPacketContents.ConfigurationRequest, config_request)
+        resp_packet = self.send_request(
+            builder, RequestPacketContents.RequestPacketContents.ConfigurationRequest, config_request,
+            minimum_version_minor=self.UART_CHANNELS_VERSION_MINOR if uart_channels_vector is not None else None)
         
         if not resp_packet:
             return False
@@ -421,7 +457,8 @@ class BPIOClient:
         config_resp.Init(resp_packet.Contents().Bytes, resp_packet.Contents().Pos)
         
         if config_resp.Error():
-            print(f"Configuration error: {config_resp.Error().decode('utf-8')}")
+            self.last_error = config_resp.Error().decode('utf-8')
+            print(f"Configuration error: {self.last_error}")
             return False
         
         return True
@@ -505,7 +542,8 @@ class BPIOClient:
             'io_value': status_resp.IoValue() if hasattr(status_resp, 'IoValue') else None,
             'disk_size_mb': status_resp.DiskSizeMb() if hasattr(status_resp, 'DiskSizeMb') else None,
             'disk_used_mb': status_resp.DiskUsedMb() if hasattr(status_resp, 'DiskUsedMb') else None,
-            'led_count': status_resp.LedCount() if hasattr(status_resp, 'LedCount') else None
+            'led_count': status_resp.LedCount() if hasattr(status_resp, 'LedCount') else None,
+            'uart_channel_count': status_resp.UartChannelCount(),
         }
 
         return status_dict
@@ -582,7 +620,8 @@ class BPIOClient:
         else:
             print("Failed to get status information.")
 
-    def data_request(self, start_main=False, start_alt=False, data_write=None, bytes_read=0, stop_main=False, stop_alt=False):
+    def data_request(self, start_main=False, start_alt=False, data_write=None, bytes_read=0, stop_main=False, stop_alt=False,
+                     channel=0, raise_errors=False):
         """Create a BPIO DataRequest packet"""
         builder = flatbuffers.Builder(1024)
 
@@ -604,11 +643,17 @@ class BPIOClient:
             DataRequest.AddStopMain(builder, True)
         if stop_alt:
             DataRequest.AddStopAlt(builder, True)
+        if channel:
+            DataRequest.AddChannel(builder, channel)
 
         data_request = DataRequest.End(builder)
-        resp_packet = self.send_request(builder, RequestPacketContents.RequestPacketContents.DataRequest, data_request)
+        resp_packet = self.send_request(
+            builder, RequestPacketContents.RequestPacketContents.DataRequest, data_request,
+            minimum_version_minor=self.UART_CHANNELS_VERSION_MINOR if channel else None)
         
         if not resp_packet:
+            if raise_errors:
+                raise IOError("BPIO data request failed (no or invalid response)")
             return False
                     
         data_resp = DataResponse.DataResponse()
@@ -616,6 +661,8 @@ class BPIOClient:
         
         if data_resp.Error():
             if self.debug: print(f"Data request error: {data_resp.Error().decode('utf-8')}")
+            if raise_errors:
+                raise IOError(f"BPIO data request error: {data_resp.Error().decode('utf-8')}")
             return False
 
         # Return data read, if any

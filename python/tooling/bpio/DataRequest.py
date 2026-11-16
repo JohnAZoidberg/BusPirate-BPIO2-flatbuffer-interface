@@ -86,8 +86,15 @@ class DataRequest(object):
             return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
         return False
 
+    # DataRequest
+    def Channel(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 0
+
 def DataRequestStart(builder):
-    builder.StartObject(6)
+    builder.StartObject(7)
 
 def Start(builder):
     DataRequestStart(builder)
@@ -133,6 +140,12 @@ def DataRequestAddStopAlt(builder, stopAlt):
 
 def AddStopAlt(builder, stopAlt):
     DataRequestAddStopAlt(builder, stopAlt)
+
+def DataRequestAddChannel(builder, channel):
+    builder.PrependUint8Slot(6, channel, 0)
+
+def AddChannel(builder, channel):
+    DataRequestAddChannel(builder, channel)
 
 def DataRequestEnd(builder):
     return builder.EndObject()
